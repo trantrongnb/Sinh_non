@@ -15,7 +15,7 @@ all_labels, all_EMR_data, all_name_files = read_EMR(folder_path)
 ## 2. Bài Toán EHG và Bài Toán Kết Hợp EHG và EMR
 
 ```python
-folder_path = "Dataset"
+folder_path = "dataset"
 all_labels, all_EMR_data, all_EHG_datas = read_EHG(folder_path)
 ```
 
