@@ -39,7 +39,25 @@ def read_EMR(folder_path):
                 else:
                     all_Labels.append([1,Ges])
 
-    return all_Labels,all_EMR_data,all_Name_files
+    df=pd.DataFrame(all_EMR_data)
+    df = df.replace(['None',None], np.nan)
+    df['Bleeding_first_trimester']=df['Bleeding_first_trimester'].replace({'yes':1,'no':0})
+    df['Bleeding_second_trimester']=df['Bleeding_second_trimester'].replace({'yes':1,'no':0})
+    df['Smoker']=df['Smoker'].replace({'yes':1,'no':0})
+
+    for col in num_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    for col in df.columns:
+        mode_val = df[col].mode()
+        if len(mode_val) > 0:
+            df[col] = df[col].fillna(mode_val[0])
+        else:
+            df[col] = df[col].fillna(0)
+
+
+
+    return all_Labels,df,all_Name_files
 
 
 
