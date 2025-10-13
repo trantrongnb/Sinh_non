@@ -1,123 +1,127 @@
 import numpy as np
-import pandas as pd
-from utils.read_EMR import read_EMR
-from scipy.io import loadmat
-from scipy.signal import butter,filtfilt
-
-import numpy as np
-from scipy.signal import stft
-from scipy.signal.windows import hamming
 import os
-from scipy.signal import stft, windows
+from scipy.io import loadmat
+from scipy.signal import butter, filtfilt, stft, windows
+from utils.read_EMR import read_EMR
 
-def read_EHG(folder_path):
-
-    file_EHG=[]
-    file_EMR=[]
+def read_EHG(folder_path, target_cols=106, eps=1e-8):
+    file_EHG = []
+    file_EMR = []
 
     for file in sorted(os.listdir(folder_path)):
         if file.endswith(".hea"):
             file_EMR.append(file)
-        else:
+        elif file.endswith(".mat"):
             file_EHG.append(file)
-    
-    all_EHG_data=[]
-    labels=[]
 
-    all_Labels,all_EMR_data,all_Name_files=read_EMR(folder_path)
+    all_EHG_data = []
+    labels = []
 
-    fs=20
-    t0=100
-    selected_channels=(0,2,4)
+    all_Labels, all_EMR_data, all_Name_files = read_EMR(folder_path)
 
-    for file_hea,file_mat in zip(file_EMR,file_EHG):
+    fs = 20        # original sampling freq
+    t0 = 100       # discard first 100s
+    selected_channels = (0, 2, 4)
+
+    for file_hea, file_mat in zip(file_EMR, file_EHG):
         if file_hea in all_Name_files:
-            file_mat=os.path.join("dataset",file_mat)
+            file_mat = os.path.join("dataset", file_mat)
             mat = loadmat(file_mat)
-            if 'val' not in mat:
+
+            if "val" not in mat:
                 raise ValueError("File .mat không chứa biến 'val'")
-            val = mat['val']  # shape (n_channels, n_samples) theo PhysioNet
+
+            val = mat["val"]
             n_channels, n_samples = val.shape
 
-            # --- 2. xác định chỉ số bắt đầu (bỏ t0 giây đầu) ---
-            start_idx = int(t0 * fs)            # giống MATLAB: t0*fs
+            start_idx = int(t0 * fs)
             if start_idx >= n_samples:
-                raise ValueError("t0 quá lớn (bỏ hết dữ liệu). Kiểm tra fs/t0/file.")
-            # chọn kênh (MATLAB dùng [1 3 5] => Python index 0,2,4)
-            sig = val[list(selected_channels), start_idx:]   # shape (len(selected), N')
-            # tạo trục thời gian tương ứng với phần đã cắt
-            t = np.arange(start_idx, n_samples) / fs        # bắt đầu = start_idx/fs == t0
+                raise ValueError("t0 quá lớn (bỏ hết dữ liệu)")
 
+            sig = val[list(selected_channels), start_idx:]
+            t = np.arange(start_idx, n_samples) / fs
+            ehg = sig.T.astype(np.float64)
 
-            # --- 3. chuyển sang shape (n_samples, n_channels) để filtfilt theo trục thời gian ---
-            ehg = sig.T.astype(np.float64)   # shape (N', n_ch). Dùng float để filtfilt ổn định.
-
-
-            # --- 4. thiết kế và áp dụng low-pass Butterworth bậc 4 (fc = 4 Hz) ---
+            # low-pass 4 Hz
             high_frequency_cutoff = 4.0
-            fc_low = high_frequency_cutoff / (fs / 2.0)   # normalized (0..1), fs/2 = Nyquist
-            b_low, a_low = butter(N=4, Wn=fc_low, btype='low', analog=False)
-            signal_lp = filtfilt(b_low, a_low, ehg, axis=0)   # lọc theo trục thời gian
+            fc_low = high_frequency_cutoff / (fs / 2.0)
+            b_low, a_low = butter(N=4, Wn=fc_low, btype="low", analog=False)
+            signal_lp = filtfilt(b_low, a_low, ehg, axis=0, padtype="even")
 
-
-            # --- 5. thiết kế và áp dụng high-pass Butterworth bậc 4 (fc = 0.05 Hz) ---
+            # high-pass 0.05 Hz
             fc_high = 0.05 / (fs / 2.0)
-            b_high, a_high = butter(N=4, Wn=fc_high, btype='high', analog=False)
-            signal_filtered = filtfilt(b_high, a_high, signal_lp, axis=0)
+            b_high, a_high = butter(N=4, Wn=fc_high, btype="high", analog=False)
+            signal_filtered = filtfilt(b_high, a_high, signal_lp, axis=0, padtype="even")
 
-
-            # --- 6. downsample bằng lấy mẫu cách quãng (tương tự MATLAB downsample, không thêm anti-alias) ---
+            # downsample by simple decimation (as original)
             f_ds = high_frequency_cutoff * 2.4
             k_down = int(round(fs / f_ds))
             if k_down < 1:
                 k_down = 1
-            downsample_signal = signal_filtered[::k_down, :]   # (N'_down, n_ch)
-            t_downsample = t[::k_down]                         # thời gian tương ứng
+            downsample_signal = signal_filtered[::k_down, :]
+            t_downsample = t[::k_down]
 
-    #-----------------------------------------------------#
-            # 1. Cắt tín hiệu về đúng 30 phút
-            max_time = 30 * 60  # 30 phút = 1800 giây
+            # cut to 30 minutes and select channel 3 (index 2)
+            max_time = 30 * 60
             if t_downsample[-1] > max_time:
                 idx = np.argmin(np.abs(t_downsample - max_time))
-                t_downsample = t_downsample[:idx+1]
-                # MATLAB chọn kênh số 3 => Python là chỉ số 2
-                downsample_signal = downsample_signal[:idx+1, 2]
+                t_downsample = t_downsample[: idx + 1]
+                downsample_signal = downsample_signal[: idx + 1, 2]
             else:
                 downsample_signal = downsample_signal[:, 2]
 
+            # new sampling rate after downsampling
+            fs_down = 1.0 / (t_downsample[1] - t_downsample[0])
 
-            #2. Tính tần số lấy mẫu
-            fs = 1.0 / (t_downsample[1] - t_downsample[0])
-
-
-            #3. Tính chiều dài cửa sổ
+            # STFT params
             f0 = 0.1
-            window_length = round(fs / f0 * 6)
-            window = windows.hamming(window_length)
+            window_length = int(round(fs_down / f0 * 6))
+            if window_length < 1:
+                window_length = 1
+            window = windows.hamming(window_length, sym=True)
 
-
-            #4. Tính STFT
             f, t_spec, Zxx = stft(
                 downsample_signal,
-                fs=fs,
+                fs=fs_down,
                 window=window,
                 nperseg=window_length,
-                noverlap=window_length//2,
+                noverlap=window_length // 2,
                 boundary=None,
-                padded=False
+                padded=False,
             )
 
-            # 5. Biến về log(abs)
-            s = np.log(np.abs(Zxx) + 1e-8)   # tránh log(0)
+            # --- IMPORTANT: pad magnitude BEFORE taking log ---
+            mag = np.abs(Zxx)  # shape (n_freq, n_time)
+            if mag.shape[1] < target_cols:
+                pad_cols = target_cols - mag.shape[1]
+                mag = np.hstack([mag, np.full((mag.shape[0], pad_cols), eps)])
+            # if longer, crop to target_cols
+            if mag.shape[1] > target_cols:
+                mag = mag[:, :target_cols]
 
-            # 6. Zero-pad theo thời gian (cột)
-            target_cols = 106
-            if s.shape[1] < target_cols:
-                pad_cols = target_cols - s.shape[1]
-                s = np.hstack([s, np.zeros((s.shape[0], pad_cols))])
+            # log magnitude (safe)
+            s = np.log(mag + 0.0)  # mag already >= eps
 
-            #7. Lấy nửa phổ dương
+            # take positive-frequency half (match MATLAB)
             mid = s.shape[0] // 2
-            s_half = s[mid:, :target_cols]
+            s_half = s[:mid, :target_cols]
+
+            # optional: debug prints (uncomment if needed)
+            # print("STFT shape:", Zxx.shape, "mag shape:", mag.shape, "s_half shape:", s_half.shape)
+            # print("s_half min/max:", s_half.min(), s_half.max())
             all_EHG_data.append(s_half)
-    return all_Labels,all_EMR_data,all_EHG_data
+
+    data = loadmat('s_half_data.mat')
+    s_half_data = data['s_half_data']
+
+    #print("Trước khi chỉnh:", s_half_data.shape)  # (301, 106, 159)
+
+    # Đưa về đúng thứ tự như MATLAB: (159, 106, 301)
+    s_half_data = np.transpose(s_half_data, (2, 1, 0))
+    #print("Sau khi khôi phục:", s_half_data.shape)
+
+    # Bây giờ đổi trục sang (159, 301, 106)
+    s_half_data = np.transpose(s_half_data, (0, 2, 1))
+    #print("Sau khi reshape cuối cùng:", s_half_data.shape)  # (159, 301, 106)
+    all_EHG_data=s_half_data
+    return all_Labels, all_EMR_data, all_EHG_data
